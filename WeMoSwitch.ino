@@ -41,8 +41,6 @@ const int relayPin    = D6;
 const int ledPin      = D7;
 const int pushButton  = D3;
 
-boolean cannotConnectToWifi = false;
-
 void setup() {
   Serial.begin(115200);
 
@@ -91,15 +89,8 @@ void loop() {
         Serial.println(packetSize);
         Serial.print("From ");
         IPAddress remote = UDP.remoteIP();
-        
-        for (int i =0; i < 4; i++) {
-          Serial.print(remote[i], DEC);
-          if (i < 3) {
-            Serial.print(".");
-          }
-        }
-        
-        Serial.print(", port ");
+        Serial.print(UDP.remoteIP());
+        Serial.print(":");
         Serial.println(UDP.remotePort());
         
         int len = UDP.read(packetBuffer, 255);
