@@ -2,6 +2,7 @@
 #include <ESP8266WebServer.h>
 #include <WiFiUdp.h>
 #include <functional>
+#include <Ticker.h>
 
 void prepareIds();
 boolean connectWifi();
@@ -9,12 +10,12 @@ boolean connectUDP();
 void startHttpServer();
 void turnOnRelay();
 void turnOffRelay();
-void toggleSwitch();
+void buttonPress();
 
 const char* ssid = "";
 const char* password = "";
-const char* switch_name = "Living Room Light";
-const char* host_name = "LivingRoomSwitch";
+const char* switchName = "Living Room Light";
+const char* hostName = "LivingRoomSwitch";
 
 unsigned int localPort = 1900;      // local port to listen on
 
@@ -27,9 +28,8 @@ ESP8266WebServer HTTP(80);
  
 boolean wifiConnected = false;
 boolean ledState = LOW;
-int interval = 200;
-long previousMillis = 0;
-long currentMillis;
+boolean relayState;
+Ticker  ticker;  // for LED status
 
 char packetBuffer[UDP_TX_PACKET_MAX_SIZE]; //buffer to hold incoming packet,
 
@@ -39,20 +39,23 @@ String device_name;
 
 const int relayPin    = D6;
 const int ledPin      = D7;
-const int pushButton  = D3;
+const int buttonPin   = D3;
 
 void setup() {
   Serial.begin(115200);
 
-  // Setup Relay, LED
-  pinMode(relayPin, OUTPUT);
+  // Setup LED
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, ledState);
+  ticker.attach_ms(400, ledBlink);
+
+  // Setup Relay
+  pinMode(relayPin, OUTPUT);
   turnOffRelay();
 
-  // Setup push button
-  pinMode(pushButton, INPUT);
-  attachInterrupt(pushButton, toggleSwitch, CHANGE);
+  // Setup  button
+  pinMode(buttonPin, INPUT);
+  attachInterrupt(buttonPin, buttonPress, CHANGE);
   
   prepareIds();
   
@@ -115,6 +118,7 @@ void loop() {
     }
   } else {
       // Turn on/off to indicate cannot connect ..      
+    ticker.attach_ms(200, ledBlink); // fast blink to indicate issue
   }
 }
 
@@ -128,7 +132,7 @@ void prepareIds() {
 
   serial = String(uuid);
   persistent_uuid = "Socket-1_0-" + serial;
-  device_name = switch_name;
+  device_name = switchName;
 }
 
 void respondToSearch() {
@@ -159,7 +163,7 @@ void respondToSearch() {
     UDP.write(response.c_str());
     UDP.endPacket();                    
 
-     Serial.println("Response sent !");
+    Serial.println("Response sent !");
 }
 
 void startHttpServer() {
@@ -274,7 +278,7 @@ boolean connectWifi(){
   boolean state = true;
   int i = 0;
 
-  WiFi.hostname(host_name);
+  WiFi.hostname(hostName);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   
@@ -284,34 +288,28 @@ boolean connectWifi(){
   // Wait for connection
   Serial.print("Connecting ...");
   while (WiFi.status() != WL_CONNECTED) {
-    currentMillis = millis();
-    if (currentMillis - previousMillis > interval)
-    {
-      previousMillis = currentMillis;
-      ledState = !ledState;
-      digitalWrite(ledPin, ledState);
-    }
-    delay(50);
+    delay(500);
     Serial.print(".");
-    if (i > 200){
+    if (i > 20){
       state = false;
       break;
     }
     i++;
   }
   
+
   if (state){
     Serial.println("");
     Serial.print("Connected to ");
     Serial.println(ssid);
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+    ticker.detach(); 
     digitalWrite(ledPin, LOW);
   }
   else {
     Serial.println("");
     Serial.println("Connection failed.");
-    digitalWrite(ledPin, HIGH);
   }
   
   return state;
@@ -335,14 +333,23 @@ boolean connectUDP(){
 }
 
 void turnOnRelay() {
- digitalWrite(relayPin, HIGH); // turn on relay with voltage HIGH 
+ relayState = HIGH;
+ digitalWrite(relayPin, relayState); // turn on relay with voltage HIGH 
 }
 
 void turnOffRelay() {
-  digitalWrite(relayPin, LOW);  // turn off relay with voltage LOW
+  relayState = LOW;
+  digitalWrite(relayPin, relayState);  // turn off relay with voltage LOW
 }
 
-void toggleSwitch() {
+void buttonPress() {
   Serial.println("Button pressed");
+}
+
+void ledBlink()
+{
+  //toggle state
+  int state = digitalRead(ledPin);  // get the current state of led pin
+  digitalWrite(ledPin, !state);     // set pin to the opposite state
 }
 
