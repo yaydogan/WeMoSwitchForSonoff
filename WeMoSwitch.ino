@@ -3,19 +3,22 @@
 #include <WiFiUdp.h>
 #include <functional>
 #include <Ticker.h>
+#include <WiFiManager.h> 
 
 void prepareIds();
-boolean connectWifi();
+void configureWifi();
 boolean connectUDP();
 void startHttpServer();
 void turnOnRelay();
 void turnOffRelay();
-void buttonPress();
+void buttonStateChange();
+void toggleRelay();
+void ledBlink();
 
 const char* ssid = "";
 const char* password = "";
 const char* switchName = "Living Room Light";
-const char* hostName = "LivingRoomSwitch";
+const char* hostName = "LivingRoomSW";
 
 unsigned int localPort = 1900;      // local port to listen on
 
@@ -36,95 +39,28 @@ char packetBuffer[UDP_TX_PACKET_MAX_SIZE]; //buffer to hold incoming packet,
 String serial;
 String persistent_uuid;
 String device_name;
+String accessPointName;
+
 
 const int relayPin    = D6;
 const int ledPin      = D7;
 const int buttonPin   = D3;
 
-void setup() {
-  Serial.begin(115200);
+const int BUTTON_WAIT   = 0;
+const int BUTTON_CHANGE = 1;
 
-  // Setup LED
-  pinMode(ledPin, OUTPUT);
-  digitalWrite(ledPin, ledState);
-  ticker.attach_ms(400, ledBlink);
+int cmd = BUTTON_WAIT;
 
-  // Setup Relay
-  pinMode(relayPin, OUTPUT);
-  turnOffRelay();
+//inverted button state
+int buttonState = HIGH;
 
-  // Setup  button
-  pinMode(buttonPin, INPUT);
-  attachInterrupt(buttonPin, buttonPress, CHANGE);
-  
-  prepareIds();
-  
-  // Initialise wifi connection
-  wifiConnected = connectWifi();
-
-  // only proceed if wifi connection successful
-  if(wifiConnected){
-    udpConnected = connectUDP();
-    
-    if (udpConnected){
-      // initialise pins if needed 
-      startHttpServer();
-    }
-  }  
-}
-
-void loop() {
-
-  HTTP.handleClient();
-  delay(1);
-  
-  
-  // if there's data available, read a packet
-  // check if the WiFi and UDP connections were successful
-  if(wifiConnected){
-    if(udpConnected){    
-      // if there’s data available, read a packet
-      int packetSize = UDP.parsePacket();
-      
-      if(packetSize) {
-        Serial.println("");
-        Serial.print("Received packet of size ");
-        Serial.println(packetSize);
-        Serial.print("From ");
-        IPAddress remote = UDP.remoteIP();
-        Serial.print(UDP.remoteIP());
-        Serial.print(":");
-        Serial.println(UDP.remotePort());
-        
-        int len = UDP.read(packetBuffer, 255);
-        
-        if (len > 0) {
-            packetBuffer[len] = 0;
-        }
-
-        String request = packetBuffer;
-        //Serial.println("Request:");
-        //Serial.println(request);
-         
-        if(request.indexOf('M-SEARCH') > 0) {
-            if(request.indexOf("urn:Belkin:device:**") > 0) {
-                Serial.println("Responding to search request ...");
-                respondToSearch();
-            }
-        }
-      }
-        
-      delay(10);
-    }
-  } else {
-      // Turn on/off to indicate cannot connect ..      
-    ticker.attach_ms(200, ledBlink); // fast blink to indicate issue
-  }
-}
+static long startPress = 0;
 
 void prepareIds() {
   uint32_t chipId = ESP.getChipId();
   char uuid[64];
+  char apName[64];
+
   sprintf_P(uuid, PSTR("38323636-4558-4dda-9188-cda0e6%02x%02x%02x"),
         (uint16_t) ((chipId >> 16) & 0xff),
         (uint16_t) ((chipId >>  8) & 0xff),
@@ -133,6 +69,9 @@ void prepareIds() {
   serial = String(uuid);
   persistent_uuid = "Socket-1_0-" + serial;
   device_name = switchName;
+
+  sprintf_P(apName, PSTR("ESP-AP-%02x"), (uint16_t) chipId & 0xff);
+  accessPointName = String(apName);
 }
 
 void respondToSearch() {
@@ -184,12 +123,12 @@ void startHttpServer() {
       Serial.println(request);
  
       if(request.indexOf("<BinaryState>1</BinaryState>") > 0) {
-          Serial.println("Got Turn on request");
+          Serial.println("Turn on request from Alexa");
           turnOnRelay();
       }
 
       if(request.indexOf("<BinaryState>0</BinaryState>") > 0) {
-          Serial.println("Got Turn off request");
+          Serial.println("Turn off request from Alexa");
           turnOffRelay();
       }
       
@@ -271,61 +210,17 @@ void startHttpServer() {
     Serial.println("HTTP Server started ..");
 }
 
-
-      
-// connect to wifi – returns true if successful or false if not
-boolean connectWifi(){
-  boolean state = true;
-  int i = 0;
-
-  WiFi.hostname(hostName);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  
-  Serial.println("");
-  Serial.println("Connecting to WiFi");
-
-  // Wait for connection
-  Serial.print("Connecting ...");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-    if (i > 20){
-      state = false;
-      break;
-    }
-    i++;
-  }
-  
-
-  if (state){
-    Serial.println("");
-    Serial.print("Connected to ");
-    Serial.println(ssid);
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-    ticker.detach(); 
-    digitalWrite(ledPin, LOW);
-  }
-  else {
-    Serial.println("");
-    Serial.println("Connection failed.");
-  }
-  
-  return state;
-}
-
 boolean connectUDP(){
   boolean state = false;
   
   Serial.println("");
   Serial.println("Connecting to UDP");
   
-  if(UDP.beginMulticast(WiFi.localIP(), ipMulti, portMulti)) {
+  if (UDP.beginMulticast(WiFi.localIP(), ipMulti, portMulti)) {
     Serial.println("Connection successful");
     state = true;
   }
-  else{
+  else {
     Serial.println("Connection failed");
   }
   
@@ -334,16 +229,18 @@ boolean connectUDP(){
 
 void turnOnRelay() {
  relayState = HIGH;
+ Serial.println("Relay ON");
  digitalWrite(relayPin, relayState); // turn on relay with voltage HIGH 
 }
 
 void turnOffRelay() {
   relayState = LOW;
+  Serial.println("Relay OFF");
   digitalWrite(relayPin, relayState);  // turn off relay with voltage LOW
 }
 
-void buttonPress() {
-  Serial.println("Button pressed");
+void buttonStateChange() {
+  cmd = BUTTON_CHANGE;
 }
 
 void ledBlink()
@@ -353,3 +250,145 @@ void ledBlink()
   digitalWrite(ledPin, !state);     // set pin to the opposite state
 }
 
+void toggleRelay() {
+  Serial.println("Toggle relay");
+  if (relayState == HIGH) {
+    turnOffRelay();
+  } else {
+    turnOnRelay();
+  }
+}
+
+//gets called when WiFiManager enters configuration mode
+void configModeCallback (WiFiManager *myWiFiManager) {
+  Serial.println("Entered config mode");
+  Serial.println(WiFi.softAPIP());
+  //if you used auto generated SSID, print it
+  Serial.println(myWiFiManager->getConfigPortalSSID());
+  //entered config mode, make led toggle faster
+  ticker.attach_ms(100, ledBlink);
+}
+
+void configureWifi() {
+
+  WiFiManager wifiManager;  
+
+  wifiManager.setAPCallback(configModeCallback);
+  wifiManager.setConfigPortalTimeout(180);
+
+  Serial.println("Starting WiFi Manager");
+
+  wifiConnected = wifiManager.autoConnect(accessPointName.c_str());
+
+  if (wifiConnected) {
+    // Stop blinking LED
+    ticker.detach(); 
+    digitalWrite(ledPin, LOW); 
+
+    udpConnected = connectUDP();
+
+    if (udpConnected) {
+      startHttpServer();
+    }
+  } else {
+    Serial.println("failed to connect and hit timeout");
+    //reset and try again, or maybe put it to deep sleep
+    ESP.reset();
+    delay(1000);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Setup LED
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, ledState);
+  ticker.attach_ms(400, ledBlink);
+
+  // Prepare IDs
+  prepareIds();
+
+  // Setup Relay
+  pinMode(relayPin, OUTPUT);
+  turnOffRelay();
+
+  // Setup  button
+  pinMode(buttonPin, INPUT);
+  attachInterrupt(buttonPin, buttonStateChange, CHANGE);
+  
+  // WIFI
+  configureWifi();
+
+}
+
+void loop() {
+
+  HTTP.handleClient();
+  delay(1);
+  
+  
+  // if there's data available, read a packet
+  // check if the WiFi and UDP connections were successful
+  if(wifiConnected){
+    if(udpConnected){    
+      // if there’s data available, read a packet
+      int packetSize = UDP.parsePacket();
+      
+      if(packetSize) {
+        Serial.println("");
+        Serial.print("Received packet of size ");
+        Serial.println(packetSize);
+        Serial.print("From ");
+        IPAddress remote = UDP.remoteIP();
+        Serial.print(UDP.remoteIP());
+        Serial.print(":");
+        Serial.println(UDP.remotePort());
+        
+        int len = UDP.read(packetBuffer, 255);
+        
+        if (len > 0) {
+            packetBuffer[len] = 0;
+        }
+
+        String request = packetBuffer;
+        //Serial.println("Request:");
+        //Serial.println(request);
+         
+        if(request.indexOf('M-SEARCH') > 0) {
+            if(request.indexOf("urn:Belkin:device:**") > 0) {
+                Serial.println("Responding to search request ...");
+                respondToSearch();
+            }
+        }
+      }
+      delay(10);
+    }
+  } 
+
+  switch (cmd) {
+    case BUTTON_WAIT:
+      break;
+    case BUTTON_CHANGE:
+      int currentState = digitalRead(buttonPin);
+      if (currentState != buttonState) {
+        if (buttonState == LOW && currentState == HIGH) {
+          long duration = millis() - startPress;
+          if (duration < 1000) {
+            Serial.println("short press - toggle relay");
+            toggleRelay();
+          } else if (duration > 3000 & duration < 10000) {
+            Serial.println("medium press - restart");
+            ESP.restart();
+          } else {
+            Serial.println("long press - configure wifi");
+            configureWifi();
+          }
+        } else if (buttonState == HIGH && currentState == LOW) {
+          startPress = millis();
+        }
+        buttonState = currentState;
+      }
+      break;
+  }
+}
