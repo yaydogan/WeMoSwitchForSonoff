@@ -15,8 +15,6 @@ void buttonStateChange();
 void toggleRelay();
 void ledBlink();
 
-const char* ssid = "";
-const char* password = "";
 const char* switchName = "Living Room Light";
 const char* hostName = "LivingRoomSW";
 
