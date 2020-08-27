@@ -16,7 +16,7 @@ void toggleRelay();
 void ledBlink();
 
 const char* switchName = "Living Room Light";
-const char* hostName = "LivingRoomSW";
+const char* hostName = "LivingRoom";
 
 unsigned int localPort = 1900;      // local port to listen on
 
