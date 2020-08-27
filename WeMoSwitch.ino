@@ -18,6 +18,8 @@ void ledBlink();
 const char* switchName = "Living Room Light";
 const char* hostName = "LivingRoom";
 
+const char *switchStatus = "OFF"
+
 unsigned int localPort = 1900;      // local port to listen on
 
 WiFiUDP UDP;
